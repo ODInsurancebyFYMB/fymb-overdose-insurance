@@ -103,5 +103,27 @@ async function runReview(b,fn){b.disabled=true;try{await fn();await readImport()
 $('importFilter').onchange=()=>{bulkSelected.clear();drawImport()};$('reviewHistory').onclick=async()=>{ bulkSelected.clear();$('bulkPanel').hidden=true;$('importTitle').textContent='Saved transaction history';$('importHelp').textContent='Previously saved transfers. Approved records are shown by default. Use Show to view other statuses. All dates are UTC.';$('importFilter').value='Approved';$('importRows').replaceChildren();$('importStatus').textContent='Loading saved history…';$('importPanel').showModal();try{await readImport();$('importStatus').textContent=`Saved history: ${importLogs.filter(r=>r.review_status==='Approved').length} approved transfers.`}catch(e){$('importStatus').textContent=e.message}};
 $('scanHistory').onclick=async()=>{let b=$('scanHistory');b.disabled=true;bulkSelected.clear();$('bulkPanel').hidden=true;$('importTitle').textContent='Historical transaction review';$('importHelp').textContent='Approve individual purchases or payouts. No live coverage or public totals are changed. All dates are UTC. Parcel contents must be confirmed manually.';$('importFilter').value='Pending';$('importRows').replaceChildren();$('importStatus').textContent='Retrieving Torn logs…';$('importPanel').showModal();try{let cursor=null,seen=new Set(),rows=new Map(),complete=false;for(let i=0;i<100;i++){let d=check(await db.functions.invoke('fymb-torn-import',{body:cursor?{nanostamp:cursor}:{}}));if(!d.success||!Array.isArray(d.logs))throw Error('Invalid API response');for(let r of d.logs){if(!r.log_id||!Number(r.torn_id)||!Array.isArray(r.items))throw Error('Invalid log');if(relevantTransfer(r))rows.set(r.log_id,r)}$('importStatus').textContent=`Scanned ${rows.size} unique transfers…`;cursor=d.next_cursor;if(!cursor){complete=true;break}if(seen.has(cursor))throw Error('Repeated cursor');seen.add(cursor);await new Promise(r=>setTimeout(r,1200))}if(!complete)throw Error('Scan limit reached; nothing saved.');if(!confirm(`Save ${rows.size} transfers to private review queue? No public totals will change.`))return;let list=[...rows.values()];for(let i=0;i<list.length;i+=100)check(await db.from('insurance_import_logs').upsert(list.slice(i,i+100),{onConflict:'log_id',ignoreDuplicates:true}));await readImport();$('importStatus').textContent=`Scan complete: ${rows.size} transfers. Review pending records.`}catch(e){$('importStatus').textContent=e.message||String(e)}finally{b.disabled=false}};
 
+// Dismiss native dialog backdrops, not clicks inside the dialog or drag gestures.
+document.querySelectorAll('dialog').forEach(dialog => {
+  let startedOutside = false;
+  const outside = event => {
+    const rect = dialog.getBoundingClientRect();
+    return event.target === dialog && (event.clientX < rect.left ||
+      event.clientX >= rect.right || event.clientY < rect.top || event.clientY >= rect.bottom);
+  };
+  dialog.addEventListener('pointerdown', event => {
+    startedOutside = event.isPrimary && event.button === 0 && outside(event);
+  });
+  dialog.addEventListener('pointercancel', () => { startedOutside = false; });
+  dialog.addEventListener('close', () => { startedOutside = false; });
+  dialog.addEventListener('click', event => {
+    const dismiss = startedOutside && outside(event);
+    startedOutside = false;
+    if (!dismiss || !dialog.open) return;
+    // Respect existing cancellation guards, including payout saves in progress.
+    if (dialog.dispatchEvent(new Event('cancel', { cancelable: true }))) dialog.close();
+  });
+});
+
 session().catch(e=>notice(e.message,true));
 </script></body></html>
